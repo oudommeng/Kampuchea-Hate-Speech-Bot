@@ -173,14 +173,16 @@ if not application:
     logger.error("Failed to create Telegram application, exiting")
     exit(1)
 
-# Test bot authentication
-async def test_bot_token():
+# Test bot authentication and initialize application
+async def initialize_application():
     try:
+        await application.initialize()
+        logger.info("Application initialized")
         bot_info = await application.bot.get_me()
         logger.info(f"Bot authentication successful: {bot_info.username} (ID: {bot_info.id})")
         return True
     except Exception as e:
-        logger.error(f"Bot authentication failed: {e}")
+        logger.error(f"Error initializing application or authenticating bot: {e}")
         exit(1)
 
 # Webhook route for Telegram (synchronous)
@@ -190,10 +192,14 @@ def webhook():
         update = Update.de_json(request.get_json(), application.bot)
         logger.info(f"Received update: {update}")
         if update:
-            # Run async update processing in the existing event loop
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(application.process_update(update))
-            logger.info("Update processed and added to queue")
+            # Run async update processing in a new event loop
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(application.process_update(update))
+                logger.info("Update processed successfully")
+            finally:
+                loop.close()
             return "ok", 200
         else:
             logger.warning("Received empty or invalid update")
@@ -215,9 +221,7 @@ if __name__ == "__main__":
         # Webhook mode for Render
         async def start_application():
             try:
-                await application.initialize()
-                logger.info("Application initialized")
-                await test_bot_token()  # Test token before setting webhook
+                await initialize_application()
                 webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}"
                 logger.info(f"Attempting to set webhook: {webhook_url}")
                 result = await application.bot.setWebhook(webhook_url)
@@ -229,7 +233,7 @@ if __name__ == "__main__":
                 logger.error(f"Error setting up webhook: {e}")
                 exit(1)
 
-        # Set up webhook
+        # Set up webhook and initialize
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -246,4 +250,12 @@ if __name__ == "__main__":
     else:
         # Polling mode for local development
         logger.info("Running in local polling mode")
-        application.run_polling()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(initialize_application())
+            loop.run_until_complete(application.run_polling())
+        except Exception as e:
+            logger.error(f"Error running polling mode: {e}")
+        finally:
+            loop.close()
