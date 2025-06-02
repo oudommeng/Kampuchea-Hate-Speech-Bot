@@ -9,6 +9,7 @@ from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
 import os
+import asyncio
 
 # Configure logging
 logging.basicConfig(
@@ -32,8 +33,12 @@ if not TOKEN:
     exit(1)
 
 # Initialize Telegram bot and application
-bot = Bot(TOKEN)
-application = Application.builder().token(TOKEN).build()
+try:
+    bot = Bot(TOKEN)
+    application = Application.builder().token(TOKEN).build()
+except Exception as e:
+    logger.error(f"Error initializing Telegram bot: {e}")
+    exit(1)
 
 # Download NLTK resources
 try:
@@ -61,11 +66,9 @@ def load_merge_map(file_path):
         return {}
 
 def remove_punc(text):
-    # Placeholder for punctuation removal
     return text
 
 def remove_stopword(text):
-    # Placeholder for stopword removal
     return text
 
 def merge_word(cmt):
@@ -77,11 +80,15 @@ def merge_word(cmt):
     return cmt
 
 def tokenize(cmt):
-    words = word_tokenize(cmt, return_tokens=True)
-    sentence = ' '.join(word for word in words if word.strip())
-    sentence = merge_word(sentence)
-    sentence = remove_stopword(sentence)
-    return sentence
+    try:
+        words = word_tokenize(cmt, return_tokens=True)
+        sentence = ' '.join(word for word in words if word.strip())
+        sentence = merge_word(sentence)
+        sentence = remove_stopword(sentence)
+        return sentence
+    except Exception as e:
+        logger.error(f"Error tokenizing text: {e}")
+        return cmt
 
 def generate_unigram(cmt):
     cmt = remove_punc(cmt)
@@ -93,17 +100,22 @@ def generate_unigram(cmt):
 def generate_bigrams(words, n):
     return list(nltk.ngrams(words, n))
 
-# Set webhook on app startup
-def set_webhook():
+# Set webhook on startup (async)
+async def set_webhook_async():
     try:
         webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'kampuchea-hate-speech-bot.onrender.com')}/{TOKEN}"
-        bot.setWebhook(url=webhook_url)
+        await bot.setWebhook(url=webhook_url)
         logger.info(f"Webhook set to: {webhook_url}")
     except Exception as e:
         logger.error(f"Error setting webhook: {e}")
 
-# Call set_webhook once during initialization
-set_webhook()
+# Run async webhook setup
+try:
+    asyncio.run(set_webhook_async())
+except RuntimeError as e:
+    logger.warning(f"Asyncio run failed (possibly already running): {e}")
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(set_webhook_async())
 
 # Command: /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -116,26 +128,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     input_comment = update.message.text
     logger.info(f"Input received: {input_comment}")
 
-    # Process input with Khmer NLP
     processed_comment = tokenize(input_comment)
     unigrams = generate_unigram(input_comment)
     bigrams = generate_bigrams(unigrams, 2)
 
     logger.info(f"Processed comment: {processed_comment}")
 
-    # Vectorize the processed comment
-    comment_vec = vectorizer.transform([processed_comment])
-
-    # Make predictions
-    mnb_pred = MNB.predict(comment_vec)
-    mnb_prediction = "Hate Speech" if mnb_pred[0] == 1 else "Non-Hate Speech"
-
-    # Log the predictions
-    logger.info(f"Predictions - MNB: {mnb_prediction}")
-
-    # Send response to the user
-    response = f"{mnb_prediction}"
-    await update.message.reply_text(response)
+    try:
+        comment_vec = vectorizer.transform([processed_comment])
+        mnb_pred = MNB.predict(comment_vec)
+        mnb_prediction = "Hate Speech" if mnb_pred[0] == 1 else "Non-Hate Speech"
+        logger.info(f"Predictions - MNB: {mnb_prediction}")
+        response = f"{mnb_prediction}"
+        await update.message.reply_text(response)
+    except Exception as e:
+        logger.error(f"Error processing prediction: {e}")
+        await update.message.reply_text("Sorry, an error occurred while processing your message.")
 
 # Webhook route for Telegram
 @app.route(f"/{TOKEN}", methods=["POST"])
