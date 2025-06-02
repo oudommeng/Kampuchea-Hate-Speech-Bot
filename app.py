@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Load environment variables
-load_dotenv("token.env")
+load_dotenv(".env")
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     logger.error("No token found in environment variables!")

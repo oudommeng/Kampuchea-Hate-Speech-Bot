@@ -1,5 +1,6 @@
 .venv/
 token.env
+.env
 *.pyc
 __pycache__/
 app_logs.log
