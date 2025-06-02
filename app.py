@@ -5,10 +5,12 @@ import nltk
 from khmernltk import word_tokenize
 import json
 import joblib
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from flask import Flask, request
+from telegram import Update, Bot
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
 import os
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -18,15 +20,35 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-
-load_dotenv('token.env')
-
 logger = logging.getLogger(__name__)
 
+# Initialize Flask app
+app = Flask(__name__)
+
+# Load environment variables
+load_dotenv('token.env')
+TOKEN = os.getenv('TOKEN')
+if not TOKEN:
+    logger.error("No token found in environment variables!")
+    exit(1)
+
+# Initialize Telegram bot and application
+bot = Bot(TOKEN)
+application = Application.builder().token(TOKEN).build()
+
+# Download NLTK resources
+try:
+    nltk.download('punkt', quiet=True)
+except Exception as e:
+    logger.error(f"Error downloading NLTK resources: {e}")
+
 # Load the saved models and vectorizer
-MNB = joblib.load('model_output/mnb_model.pkl')
-# BNB = joblib.load('model_output/bnb_model.pkl')
-vectorizer = joblib.load('model_output/vectorizer.pkl')
+try:
+    MNB = joblib.load('model_output/mnb_model.pkl')
+    vectorizer = joblib.load('model_output/vectorizer.pkl')
+except Exception as e:
+    logger.error(f"Error loading ML models: {e}")
+    exit(1)
 
 # Helper functions for Khmer text preprocessing
 def load_merge_map(file_path):
@@ -38,13 +60,11 @@ def load_merge_map(file_path):
         return {}
 
 def remove_punc(text):
-    # Placeholder for punctuation removal function
-    # Add your punctuation removal logic here if needed
+    # Placeholder for punctuation removal (implement if needed)
     return text
 
 def remove_stopword(text):
-    # Placeholder for stopword removal function
-    # Add your stopword removal logic here if needed
+    # Placeholder for stopword removal (implement if needed)
     return text
 
 def merge_word(cmt):
@@ -72,22 +92,14 @@ def generate_unigram(cmt):
 def generate_bigrams(words, n):
     return list(nltk.ngrams(words, n))
 
-
-# Get token from environment variables
-TOKEN = os.environ.get('TOKEN')
-if not TOKEN:
-    logger.error("No token found in environment variables!")
-    exit(1)
-
-
-# Handle the /start command
-async def start(update: Update, context):
+# Command: /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Welcome to the Hate Speech Detection Bot! Send me a comment, and I’ll predict if it’s hate speech or not."
     )
 
 # Handle incoming text messages
-async def handle_message(update: Update, context):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     input_comment = update.message.text
     logger.info(f"Input received: {input_comment}")
 
@@ -103,11 +115,7 @@ async def handle_message(update: Update, context):
 
     # Make predictions
     mnb_pred = MNB.predict(comment_vec)
-    # bnb_pred = BNB.predict(comment_vec)
-
-    # Convert predictions to readable labels
     mnb_prediction = "Hate Speech" if mnb_pred[0] == 1 else "Non-Hate Speech"
-    # bnb_prediction = "Hate Speech" if bnb_pred[0] == 1 else "Non-Hate Speech"
 
     # Log the predictions
     logger.info(f"Predictions - MNB: {mnb_prediction}")
@@ -116,21 +124,36 @@ async def handle_message(update: Update, context):
     response = f"{mnb_prediction}"
     await update.message.reply_text(response)
 
-if __name__ == '__main__':
-    # Download necessary NLTK resources
+# Webhook route for Telegram
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
     try:
-        nltk.download('punkt')
+        update = Update.de_json(request.get_json(), bot)
+        application.process_update(update)
+        return "ok", 200
     except Exception as e:
-        logger.error(f"Error downloading NLTK resources: {e}")
+        logger.error(f"Error processing webhook: {e}")
+        return "error", 500
 
+# Root route for health check
+@app.route("/")
+def index():
+    return "Kampuchea Hate Speech Bot is running!"
+
+# Set webhook on startup
+@app.before_first_request
+def set_webhook():
+    try:
+        webhook_url = f"https://{os.getenv('VERCEL_URL', 'your-bot-app-name.vercel.app')}/{TOKEN}"
+        bot.setWebhook(url=webhook_url)
+        logger.info(f"Webhook set to: {webhook_url}")
+    except Exception as e:
+        logger.error(f"Error setting webhook: {e}")
+
+# Add handlers
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+if __name__ == '__main__':
     logger.info("Application started")
-
-    # Create the Application and pass it your bot's token
-    application = Application.builder().token(TOKEN).build()
-
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Start the bot
-    application.run_polling()
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
