@@ -34,18 +34,31 @@ app = Flask(__name__)
 # Load environment variables
 load_dotenv(".env")
 TOKEN = os.getenv("TOKEN")
+RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME", "your-render-app.onrender.com")
+USE_WEBHOOK = os.getenv("USE_WEBHOOK", "false").lower() in ("true", "1", "t")
+
 if not TOKEN:
-    logger.error("No token found in environment variables!")
+    logger.error("No TOKEN found in environment variables! Please set the Telegram bot token.")
     exit(1)
+
+if USE_WEBHOOK and not RENDER_EXTERNAL_HOSTNAME:
+    logger.error("No RENDER_EXTERNAL_HOSTNAME found in environment variables! Required for webhook mode.")
+    exit(1)
+
+logger.info(f"Environment variables - TOKEN: {'<set>' if TOKEN else '<not set>'}, "
+            f"RENDER_EXTERNAL_HOSTNAME: {RENDER_EXTERNAL_HOSTNAME}, USE_WEBHOOK: {USE_WEBHOOK}")
 
 # Download NLTK resources
 try:
     nltk.download("punkt", quiet=True)
+    logger.info("NLTK resources downloaded successfully")
 except Exception as e:
     logger.error(f"Error downloading NLTK resources: {e}")
 
 # Load the saved models and vectorizer
 try:
+    if not os.path.exists("model_output/mnb_model.pkl") or not os.path.exists("model_output/vectorizer.pkl"):
+        raise FileNotFoundError("Model or vectorizer file not found in model_output directory")
     MNB = joblib.load("model_output/mnb_model.pkl")
     vectorizer = joblib.load("model_output/vectorizer.pkl")
     logger.info(
@@ -59,8 +72,13 @@ except Exception as e:
 # Helper functions for Khmer text preprocessing
 def load_merge_map(file_path):
     try:
+        logger.info(f"Checking if {file_path} exists: {os.path.exists(file_path)}")
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"{file_path} not found")
         with open(file_path, "r", encoding="utf-8") as file:
-            return json.load(file)
+            merge_map = json.load(file)
+            logger.info(f"Merge map loaded successfully with {len(merge_map)} entries")
+            return merge_map
     except Exception as e:
         logger.error(f"Error loading merge map: {e}")
         return {}
@@ -85,6 +103,7 @@ def tokenize(cmt):
         sentence = " ".join(word for word in words if word.strip())
         sentence = merge_word(sentence)
         sentence = remove_stopword(sentence)
+        logger.info(f"Tokenized comment: {sentence}")
         return sentence
     except Exception as e:
         logger.error(f"Error tokenizing text: {e}")
@@ -100,10 +119,10 @@ def generate_unigram(cmt):
 def generate_bigrams(words, n):
     return list(nltk.ngrams(words, n))
 
-# Command handlers must be defined before create_application()
+# Command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Welcome to the Hate Speech Detection Bot! Send me a word, and I'll predict if it's hate speech or not."
+        "Welcome to the Kampuchea Hate Speech Detection Bot! Send me a message, and I'll predict if it's hate speech or not."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -131,30 +150,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def create_application():
     try:
         application = Application.builder().token(TOKEN).build()
-        
-        # Add handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
         )
-        
+        logger.info("Telegram application created successfully")
         return application
     except Exception as e:
         logger.error(f"Error creating Telegram application: {e}")
         return None
 
-# Create application instance
+# Create application instance and test token
 application = create_application()
 if not application:
+    logger.error("Failed to create Telegram application, exiting")
     exit(1)
+
+# Test bot authentication
+async def test_bot_token():
+    try:
+        bot_info = await application.bot.get_me()
+        logger.info(f"Bot authentication successful: {bot_info.username} (ID: {bot_info.id})")
+    except Exception as e:
+        logger.error(f"Bot authentication failed: {e}")
+        exit(1)
 
 # Webhook route for Telegram
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     try:
         update = Update.de_json(request.get_json(), application.bot)
-        application.update_queue.put(update)
-        return "ok", 200
+        logger.info(f"Received update: {update}")
+        if update:
+            asyncio.run_coroutine_threadsafe(application.process_update(update), asyncio.get_event_loop())
+            logger.info("Update processed and added to queue")
+            return "ok", 200
+        else:
+            logger.warning("Received empty or invalid update")
+            return "ok", 200
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
         return "error", 500
@@ -167,21 +200,30 @@ def index():
 if __name__ == "__main__":
     logger.info("Application started")
     
-    # Check if we should use webhook (production) or polling (local)
-    if os.getenv('USE_WEBHOOK', '').lower() in ('true', '1', 't'):
-        # Webhook mode
-        async def set_webhook():
-            webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'your-render-app.onrender.com')}/{TOKEN}"
-            await application.bot.setWebhook(webhook_url)
-            logger.info(f"Webhook set to: {webhook_url}")
+    if USE_WEBHOOK:
+        # Webhook mode for Render
+        async def start_application():
+            try:
+                await application.initialize()
+                await application.start()
+                await test_bot_token()  # Test token before setting webhook
+                webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}"
+                result = await application.bot.setWebhook(webhook_url)
+                logger.info(f"Webhook set to: {webhook_url}, Success: {result}")
+                if not result:
+                    logger.error("Failed to set webhook")
+                    exit(1)
+            except Exception as e:
+                logger.error(f"Error setting up webhook: {e}")
+                exit(1)
+
+        # Create and run the event loop
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(start_application())
         
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(set_webhook())
-        
-        # Start Flask app
+        # Start Flask app with Gunicorn (Render handles this via gunicorn command)
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     else:
-        # Polling mode
+        # Polling mode for local development
         logger.info("Running in local polling mode")
         application.run_polling()
