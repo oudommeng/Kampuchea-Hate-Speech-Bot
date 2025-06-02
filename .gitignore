@@ -1,11 +1,5 @@
-# Environment variables
-*.env
-
-# Logs
-*.log
-
-# Python cache files
-__pycache__/
-*.py[cod]
-*$py.class
 .venv/
+token.env
+*.pyc
+__pycache__/
+app_logs.log
