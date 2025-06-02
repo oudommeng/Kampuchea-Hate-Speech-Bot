@@ -34,7 +34,7 @@ app = Flask(__name__)
 # Load environment variables
 load_dotenv(".env")
 TOKEN = os.getenv("TOKEN")
-RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME", "your-render-app.onrender.com")
+RENDER_EXTERNAL_HOSTNAME = os.getenv("RENDER_EXTERNAL_HOSTNAME")
 USE_WEBHOOK = os.getenv("USE_WEBHOOK", "false").lower() in ("true", "1", "t")
 
 if not TOKEN:
@@ -201,6 +201,7 @@ if __name__ == "__main__":
     logger.info("Application started")
     
     if USE_WEBHOOK:
+        logger.info("Entering webhook mode")
         # Webhook mode for Render
         async def start_application():
             try:
@@ -208,6 +209,7 @@ if __name__ == "__main__":
                 await application.start()
                 await test_bot_token()  # Test token before setting webhook
                 webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}"
+                logger.info(f"Attempting to set webhook: {webhook_url}")
                 result = await application.bot.setWebhook(webhook_url)
                 logger.info(f"Webhook set to: {webhook_url}, Success: {result}")
                 if not result:
@@ -219,7 +221,11 @@ if __name__ == "__main__":
 
         # Create and run the event loop
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(start_application())
+        try:
+            loop.run_until_complete(start_application())
+        except Exception as e:
+            logger.error(f"Error running event loop: {e}")
+            exit(1)
         
         # Start Flask app with Gunicorn (Render handles this via gunicorn command)
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
