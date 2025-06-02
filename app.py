@@ -1,5 +1,4 @@
 import logging
-import datetime
 import re
 import nltk
 from khmernltk import word_tokenize
@@ -46,6 +45,8 @@ except Exception as e:
 try:
     MNB = joblib.load('model_output/mnb_model.pkl')
     vectorizer = joblib.load('model_output/vectorizer.pkl')
+    logger.info(f"Model sizes: mnb_model.pkl={os.path.getsize('model_output/mnb_model.pkl')/1024:.2f}KB, "
+                f"vectorizer.pkl={os.path.getsize('model_output/vectorizer.pkl')/1024:.2f}KB")
 except Exception as e:
     logger.error(f"Error loading ML models: {e}")
     exit(1)
@@ -60,11 +61,11 @@ def load_merge_map(file_path):
         return {}
 
 def remove_punc(text):
-    # Placeholder for punctuation removal (implement if needed)
+    # Placeholder for punctuation removal
     return text
 
 def remove_stopword(text):
-    # Placeholder for stopword removal (implement if needed)
+    # Placeholder for stopword removal
     return text
 
 def merge_word(cmt):
@@ -91,6 +92,18 @@ def generate_unigram(cmt):
 
 def generate_bigrams(words, n):
     return list(nltk.ngrams(words, n))
+
+# Set webhook on app startup
+def set_webhook():
+    try:
+        webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'kampuchea-hate-speech-bot.onrender.com')}/{TOKEN}"
+        bot.setWebhook(url=webhook_url)
+        logger.info(f"Webhook set to: {webhook_url}")
+    except Exception as e:
+        logger.error(f"Error setting webhook: {e}")
+
+# Call set_webhook once during initialization
+set_webhook()
 
 # Command: /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,16 +152,6 @@ def webhook():
 @app.route("/")
 def index():
     return "Kampuchea Hate Speech Bot is running!"
-
-# Set webhook on startup
-@app.before_first_request
-def set_webhook():
-    try:
-        webhook_url = f"https://{os.getenv('VERCEL_URL', 'your-bot-app-name.vercel.app')}/{TOKEN}"
-        bot.setWebhook(url=webhook_url)
-        logger.info(f"Webhook set to: {webhook_url}")
-    except Exception as e:
-        logger.error(f"Error setting webhook: {e}")
 
 # Add handlers
 application.add_handler(CommandHandler("start", start))
