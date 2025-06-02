@@ -16,7 +16,6 @@ from telegram.ext import (
 from dotenv import load_dotenv
 import os
 import asyncio
-from threading import Thread
 
 # Configure logging
 logging.basicConfig(
@@ -184,14 +183,16 @@ async def test_bot_token():
         logger.error(f"Bot authentication failed: {e}")
         exit(1)
 
-# Webhook route for Telegram
+# Webhook route for Telegram (synchronous)
 @app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook():
+def webhook():
     try:
         update = Update.de_json(request.get_json(), application.bot)
         logger.info(f"Received update: {update}")
         if update:
-            await application.process_update(update)
+            # Run async update processing in the existing event loop
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(application.process_update(update))
             logger.info("Update processed and added to queue")
             return "ok", 200
         else:
@@ -205,17 +206,6 @@ async def webhook():
 @app.route("/")
 def index():
     return "Kampuchea Hate Speech Bot is running!"
-
-# Run application in a separate thread
-def run_application():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(application.run_polling())
-    except Exception as e:
-        logger.error(f"Error running application: {e}")
-    finally:
-        loop.close()
 
 if __name__ == "__main__":
     logger.info("Application started")
@@ -256,6 +246,4 @@ if __name__ == "__main__":
     else:
         # Polling mode for local development
         logger.info("Running in local polling mode")
-        thread = Thread(target=run_application)
-        thread.start()
-        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+        application.run_polling()
