@@ -16,6 +16,7 @@ from telegram.ext import (
 from dotenv import load_dotenv
 import os
 import asyncio
+from threading import Thread
 
 # Configure logging
 logging.basicConfig(
@@ -121,11 +122,17 @@ def generate_bigrams(words, n):
 
 # Command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Welcome to the Kampuchea Hate Speech Detection Bot! Send me a message, and I'll predict if it's hate speech or not."
-    )
+    logger.info("Executing start command")
+    try:
+        await update.message.reply_text(
+            "Welcome to the Kampuchea Hate Speech Detection Bot! Send me a message, and I'll predict if it's hate speech or not."
+        )
+        logger.info("Start command response sent")
+    except Exception as e:
+        logger.error(f"Error in start command: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Handling message: {update.message.text}")
     input_comment = update.message.text
     logger.info(f"Input received: {input_comment}")
 
@@ -142,6 +149,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Predictions - MNB: {mnb_prediction}")
         response = f"Prediction: {mnb_prediction}"
         await update.message.reply_text(response)
+        logger.info("Message response sent")
     except Exception as e:
         logger.error(f"Error processing prediction: {e}")
         await update.message.reply_text("Sorry, an error occurred while processing your message.")
@@ -160,7 +168,7 @@ def create_application():
         logger.error(f"Error creating Telegram application: {e}")
         return None
 
-# Create application instance and test token
+# Create application instance
 application = create_application()
 if not application:
     logger.error("Failed to create Telegram application, exiting")
@@ -171,18 +179,19 @@ async def test_bot_token():
     try:
         bot_info = await application.bot.get_me()
         logger.info(f"Bot authentication successful: {bot_info.username} (ID: {bot_info.id})")
+        return True
     except Exception as e:
         logger.error(f"Bot authentication failed: {e}")
         exit(1)
 
 # Webhook route for Telegram
 @app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
+async def webhook():
     try:
         update = Update.de_json(request.get_json(), application.bot)
         logger.info(f"Received update: {update}")
         if update:
-            asyncio.run_coroutine_threadsafe(application.process_update(update), asyncio.get_event_loop())
+            await application.process_update(update)
             logger.info("Update processed and added to queue")
             return "ok", 200
         else:
@@ -197,6 +206,17 @@ def webhook():
 def index():
     return "Kampuchea Hate Speech Bot is running!"
 
+# Run application in a separate thread
+def run_application():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(application.run_polling())
+    except Exception as e:
+        logger.error(f"Error running application: {e}")
+    finally:
+        loop.close()
+
 if __name__ == "__main__":
     logger.info("Application started")
     
@@ -206,7 +226,7 @@ if __name__ == "__main__":
         async def start_application():
             try:
                 await application.initialize()
-                await application.start()
+                logger.info("Application initialized")
                 await test_bot_token()  # Test token before setting webhook
                 webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}"
                 logger.info(f"Attempting to set webhook: {webhook_url}")
@@ -219,17 +239,23 @@ if __name__ == "__main__":
                 logger.error(f"Error setting up webhook: {e}")
                 exit(1)
 
-        # Create and run the event loop
-        loop = asyncio.get_event_loop()
+        # Set up webhook
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
             loop.run_until_complete(start_application())
         except Exception as e:
             logger.error(f"Error running event loop: {e}")
             exit(1)
+        finally:
+            loop.close()
         
-        # Start Flask app with Gunicorn (Render handles this via gunicorn command)
+        # Start Flask app
+        logger.info("Starting Flask app")
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     else:
         # Polling mode for local development
         logger.info("Running in local polling mode")
-        application.run_polling()
+        thread = Thread(target=run_application)
+        thread.start()
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
