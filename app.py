@@ -192,14 +192,9 @@ def webhook():
         update = Update.de_json(request.get_json(), application.bot)
         logger.info(f"Received update: {update}")
         if update:
-            # Run async update processing in a new event loop
-            loop = asyncio.new_event_loop()
-            try:
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(application.process_update(update))
-                logger.info("Update processed successfully")
-            finally:
-                loop.close()
+            # Process update synchronously using asyncio.run
+            asyncio.run(application.process_update(update))
+            logger.info("Update processed successfully")
             return "ok", 200
         else:
             logger.warning("Received empty or invalid update")
@@ -218,31 +213,15 @@ if __name__ == "__main__":
     
     if USE_WEBHOOK:
         logger.info("Entering webhook mode")
-        # Webhook mode for Render
-        async def start_application():
-            try:
-                await initialize_application()
-                webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}"
-                logger.info(f"Attempting to set webhook: {webhook_url}")
-                result = await application.bot.setWebhook(webhook_url)
-                logger.info(f"Webhook set to: {webhook_url}, Success: {result}")
-                if not result:
-                    logger.error("Failed to set webhook")
-                    exit(1)
-            except Exception as e:
-                logger.error(f"Error setting up webhook: {e}")
-                exit(1)
-
-        # Set up webhook and initialize
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(start_application())
-        except Exception as e:
-            logger.error(f"Error running event loop: {e}")
+        # Initialize and set webhook
+        asyncio.run(initialize_application())
+        webhook_url = f"https://{RENDER_EXTERNAL_HOSTNAME}/{TOKEN}"
+        logger.info(f"Attempting to set webhook: {webhook_url}")
+        result = asyncio.run(application.bot.setWebhook(webhook_url))
+        logger.info(f"Webhook set to: {webhook_url}, Success: {result}")
+        if not result:
+            logger.error("Failed to set webhook")
             exit(1)
-        finally:
-            loop.close()
         
         # Start Flask app
         logger.info("Starting Flask app")
@@ -250,12 +229,5 @@ if __name__ == "__main__":
     else:
         # Polling mode for local development
         logger.info("Running in local polling mode")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(initialize_application())
-            loop.run_until_complete(application.run_polling())
-        except Exception as e:
-            logger.error(f"Error running polling mode: {e}")
-        finally:
-            loop.close()
+        asyncio.run(initialize_application())
+        asyncio.run(application.run_polling())
